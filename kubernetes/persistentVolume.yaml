@@ -5,7 +5,7 @@ metadata:
   namespace: wanderlust
 spec:
   capacity:
-    storage: 5Gi
+    storage: 2Gi
   volumeMode: Filesystem
   accessModes:
     - ReadWriteOnce
