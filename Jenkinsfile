@@ -1,16 +1,16 @@
-@Library('Shared') _
 pipeline {
-    agent {label 'Node'}
-    
-    environment{
+    agent any
+
+    environment {
         SONAR_HOME = tool "Sonar"
+        DOCKER_HUB_CREDENTIALS = credentials('Dockerhub')
     }
-    
+
     parameters {
         string(name: 'FRONTEND_DOCKER_TAG', defaultValue: '', description: 'Setting docker image for latest push')
         string(name: 'BACKEND_DOCKER_TAG', defaultValue: '', description: 'Setting docker image for latest push')
     }
-    
+
     stages {
         stage("Validate Parameters") {
             steps {
@@ -21,105 +21,96 @@ pipeline {
                 }
             }
         }
-        stage("Workspace cleanup"){
-            steps{
-                script{
-                    cleanWs()
-                }
+
+        stage("Workspace cleanup") {
+            steps {
+                cleanWs()
             }
         }
-        
+
         stage('Git: Code Checkout') {
             steps {
-                script{
-                    code_checkout("https://github.com/LondheShubham153/Wanderlust-Mega-Project.git","main")
-                }
+                git url: "https://github.com/kkiran98/Wanderlust-Mega-Project.git", branch: "main"
             }
         }
-        
-        stage("Trivy: Filesystem scan"){
-            steps{
-                script{
-                    trivy_scan()
+
+        stage("Trivy: Filesystem scan") {
+            steps {
+                sh "trivy fs ."
+            }
+        }
+
+        stage("OWASP: Dependency check") {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'OWASP'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+
+        stage("SonarQube: Code Analysis") {
+            steps {
+                withSonarQubeEnv('Sonar') {
+                    sh "$SONAR_HOME/bin/sonar-scanner -Dsonar.projectName=wanderlust -Dsonar.projectKey=wanderlust -X"
                 }
             }
         }
 
-        stage("OWASP: Dependency check"){
-            steps{
-                script{
-                    owasp_dependency()
+        stage("SonarQube: Code Quality Gates") {
+            steps {
+                timeout(time: 1, unit: "MINUTES") {
+                    waitForQualityGate abortPipeline: false
                 }
             }
         }
-        
-        stage("SonarQube: Code Analysis"){
-            steps{
-                script{
-                    sonarqube_analysis("Sonar","wanderlust","wanderlust")
-                }
-            }
-        }
-        
-        stage("SonarQube: Code Quality Gates"){
-            steps{
-                script{
-                    sonarqube_code_quality()
-                }
-            }
-        }
-        
+
         stage('Exporting environment variables') {
-            parallel{
-                stage("Backend env setup"){
+            parallel {
+                stage("Backend env setup") {
                     steps {
-                        script{
-                            dir("Automations"){
-                                sh "bash updatebackendnew.sh"
-                            }
+                        dir("Automations") {
+                            sh "bash updatebackendnew.sh"
                         }
                     }
                 }
-                
-                stage("Frontend env setup"){
+                stage("Frontend env setup") {
                     steps {
-                        script{
-                            dir("Automations"){
-                                sh "bash updatefrontendnew.sh"
-                            }
+                        dir("Automations") {
+                            sh "bash updatefrontendnew.sh"
                         }
                     }
                 }
             }
         }
-        
-        stage("Docker: Build Images"){
-            steps{
-                script{
-                        dir('backend'){
-                            docker_build("wanderlust-backend-beta","${params.BACKEND_DOCKER_TAG}","trainwithshubham")
-                        }
-                    
-                        dir('frontend'){
-                            docker_build("wanderlust-frontend-beta","${params.FRONTEND_DOCKER_TAG}","trainwithshubham")
-                        }
+
+        stage("Docker: Build Images") {
+            steps {
+                script {
+                    dir('backend') {
+                        sh "docker build -t kiranrepository2023/wanderlust-backend:${params.BACKEND_DOCKER_TAG} ."
+                    }
+                    dir('frontend') {
+                        sh "docker build -t kiranrepository2023/wanderlust-frontend:${params.FRONTEND_DOCKER_TAG} ."
+                    }
                 }
             }
         }
-        
-        stage("Docker: Push to DockerHub"){
-            steps{
-                script{
-                    docker_push("wanderlust-backend-beta","${params.BACKEND_DOCKER_TAG}","trainwithshubham") 
-                    docker_push("wanderlust-frontend-beta","${params.FRONTEND_DOCKER_TAG}","trainwithshubham")
+
+        stage("Docker: Push to DockerHub") {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'Dockerhub', toolName: 'docker') {
+                        sh "docker push kiranrepository2023/wanderlust-backend:${params.BACKEND_DOCKER_TAG}"
+                        sh "docker push kiranrepository2023/wanderlust-frontend:${params.FRONTEND_DOCKER_TAG}"
+                    }
                 }
             }
         }
     }
-    post{
-        success{
+
+    post {
+        success {
             archiveArtifacts artifacts: '*.xml', followSymlinks: false
-            build job: "Wanderlust-CD", parameters: [
+            build job: "Wanderlust CD", parameters: [
                 string(name: 'FRONTEND_DOCKER_TAG', value: "${params.FRONTEND_DOCKER_TAG}"),
                 string(name: 'BACKEND_DOCKER_TAG', value: "${params.BACKEND_DOCKER_TAG}")
             ]
